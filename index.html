@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Go WASM Secure Archiver</title>
+    <title>Secure Archive Explorer Pro</title>
     <script src="wasm_exec.js"></script>
     <style>
-        /* --- Modern UI & Theme Engine --- */
+        /* --- Theme Variables --- */
         :root {
             --primary: #0078d4;
             --bg: #f3f2f1;
@@ -19,6 +19,8 @@
             --status-bg: #f3f2f1;
             --accent-text: #605e5c;
             --input-bg: #ffffff;
+            --info-bg: #fff4ce; /* Amber info box */
+            --info-text: #323130;
         }
 
         [data-theme="dark"] {
@@ -32,15 +34,17 @@
             --status-bg: #1b1a19;
             --accent-text: #a19f9d;
             --input-bg: #3b3a39;
+            --info-bg: #3b3a39;
+            --info-text: #f3f2f1;
         }
 
         body { 
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
+            font-family: 'Segoe UI', system-ui, sans-serif; 
             background: var(--bg); 
             color: var(--text);
             margin: 0; padding: 20px;
             display: flex; justify-content: center;
-            transition: background 0.2s, color 0.2s;
+            transition: background 0.2s;
             height: 100vh;
             box-sizing: border-box;
         }
@@ -68,9 +72,27 @@
             margin-bottom: 15px;
         }
 
-        h2 { margin: 0; font-weight: 600; font-size: 1.25rem; }
+        h2 { margin: 0; font-weight: 600; font-size: 1.2rem; }
         
-        .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        /* --- Quick Start Tutorial Styles --- */
+        .tutorial-box {
+            background: var(--info-bg);
+            color: var(--info-text);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .tutorial-title {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+
+        .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
         
         button {
             padding: 8px 14px; cursor: pointer;
@@ -81,30 +103,27 @@
             font-size: 13px; transition: all 0.2s;
             display: flex; align-items: center; gap: 6px;
         }
-        button:hover:not(:disabled) { background: var(--hover); border-color: #8a8886; }
+        button:hover:not(:disabled) { background: var(--hover); }
         button.primary { background: var(--primary); color: white; border: none; }
-        button.primary:hover:not(:disabled) { background: #106ebe; }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
 
         .password-box {
             display: flex; align-items: center; gap: 8px;
             padding-left: 12px; border-left: 1px solid var(--border);
-            margin-left: 5px;
         }
 
-        input[type="password"], input[type="text"] {
+        input[type="password"] {
             padding: 7px 10px;
             border-radius: 4px;
             border: 1px solid var(--border);
             background: var(--input-bg);
             color: var(--text);
             font-size: 13px;
-            width: 130px;
+            width: 140px;
         }
 
         .file-list-container {
             flex: 1; overflow-y: auto;
-            border-bottom: 1px solid var(--border);
             background: var(--surface);
         }
 
@@ -125,12 +144,9 @@
         .checkbox-col { width: 45px; text-align: center; }
 
         footer { 
-            padding: 8px 20px; 
-            background: var(--status-bg); 
-            font-size: 12px; 
-            color: var(--accent-text); 
-            display: flex;
-            justify-content: space-between;
+            padding: 8px 20px; background: var(--status-bg); 
+            font-size: 12px; color: var(--accent-text); 
+            display: flex; justify-content: space-between;
         }
     </style>
 </head>
@@ -139,23 +155,31 @@
 <div class="app-container">
     <header>
         <div class="header-top">
-            <h2>Secure Archive Explorer <span style="font-weight: 200; font-size: 0.7em; opacity: 0.6;">(AES-GCM / AES-256)</span></h2>
-            <button onclick="toggleTheme()" id="themeBtn">🌓 theme</button>
+            <h2>Archive Manager</h2>
+            <button onclick="toggleTheme()" id="themeBtn">🌓 Appearance</button>
         </div>
+        
         <div class="toolbar">
-            <button onclick="openArchive()">📁 Open</button>
-            <button onclick="createArchive('zip')">📦 .zip</button>
-            <button onclick="createArchive('tgz')">📦 .tar.gz</button>
+            <button onclick="openArchive()">📁 Inspect Archive</button>
+            <button onclick="createArchive('zip')">📦 Create .zip</button>
+            <button onclick="createArchive('tgz')">📦 Create .tar.gz</button>
             <button id="extractBtn" class="primary" onclick="extractSelected()" disabled>📥 Extract</button>
             
             <div class="password-box">
                 <input type="password" id="pw" placeholder="AES Password">
                 <label style="font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
-                    <input type="checkbox" id="fullEnc"> encrypt result (.enc)
+                    <input type="checkbox" id="fullEnc"> Wrap (.enc)
                 </label>
             </div>
         </div>
     </header>
+
+    <div class="tutorial-box">
+        <span class="tutorial-title">Quick Start</span>
+        To password protect a zip, enter a password first, and then select <b>Create .zip</b>. tar does not support password protection.
+        <br>
+        <span style="opacity: 0.8;"><b>Advanced:</b> Enable extra encryption by checking "Wrap (.enc)" to encrypt the entire container. This is not strictly necessary for password protected zips.</span>
+    </div>
 
     <div class="file-list-container">
         <table>
@@ -176,7 +200,7 @@
 </div>
 
 <script>
-    // --- 1. Theme Logic ---
+    // --- Theme Control ---
     function setTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('archive-theme', theme);
@@ -187,7 +211,7 @@
     }
     setTheme(localStorage.getItem('archive-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
 
-    // --- 2. WASM Runtime ---
+    // --- WASM Initialization ---
     const go = new Go();
     let archiveBuffer = null;
     let archiveFormat = "";
@@ -195,19 +219,18 @@
 
     WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
         go.run(result.instance);
-        log("WASM Runtime Ready.");
+        log("WASM System Online.");
     }).catch(err => log("WASM Error: " + err.message));
 
-    // --- 3. Safety Check ---
     function checkWasm() {
         if (typeof listArchive !== 'function') {
-            alert("Go WASM functions not yet exported. Please wait a second and try again.");
+            alert("Archive logic is still initializing. Please wait a moment.");
             return false;
         }
         return true;
     }
 
-    // --- 4. Archive Management ---
+    // --- Archive Operations ---
     async function openArchive() {
         if (!checkWasm()) return;
         try {
@@ -215,38 +238,37 @@
             const f = await h.getFile();
             let bytes = new Uint8Array(await f.arrayBuffer());
             
-            // Handle .enc container decryption
             if (f.name.endsWith('.enc')) {
                 const password = document.getElementById('pw').value;
-                if (!password) return alert("Password required for .enc decryption.");
+                if (!password) return alert("Please enter the decryption key in the password field.");
                 
                 const decrypted = decryptWrap(bytes, password);
-                if (!decrypted) return alert("Decryption failed. Check password.");
+                if (!decrypted) return alert("Decryption failed. Incorrect password or corrupted file.");
                 
                 bytes = decrypted;
-                log("Universal container decrypted.");
+                log("Full-wrap container decrypted.");
             }
 
-            // Magic Byte Detection: ZIP (PK) or GZIP (0x1F 0x8B)
+            // Sniff format by magic bytes: PK (Zip) or 0x1F 0x8B (Gzip)
             if (bytes[0] === 0x50 && bytes[1] === 0x4B) {
                 archiveFormat = 'zip';
             } else if (bytes[0] === 0x1F && bytes[1] === 0x8B) {
                 archiveFormat = 'tgz';
             } else {
-                archiveFormat = 'tgz'; // Default fallback
+                archiveFormat = 'tgz'; // Fallback
             }
 
             archiveBuffer = bytes;
             const list = listArchive(archiveBuffer, archiveFormat);
             
             renderFileList(list || []);
-            log(`Loaded ${f.name} (Detected: ${archiveFormat})`);
+            log(`Loaded: ${f.name} (${archiveFormat.toUpperCase()})`);
         } catch (e) { if (e.name !== 'AbortError') log("Error: " + e.message); }
     }
 
     function renderFileList(files) {
         const body = document.getElementById('fileListBody');
-        body.innerHTML = files.length ? '' : '<tr><td colspan="2" style="text-align:center; padding:20px;">Archive is empty or format mismatch.</td></tr>';
+        body.innerHTML = files.length ? '' : '<tr><td colspan="2" style="text-align:center; padding:20px; opacity:0.5;">No files found.</td></tr>';
         document.getElementById('extractBtn').disabled = true;
         document.getElementById('fileCount').innerText = `${files.length} items`;
         
@@ -273,16 +295,6 @@
         updateUI();
     }
 
-    // --- 5. Extraction Logic ---
-    async function getHandleForPath(parentHandle, path) {
-        const parts = path.split('/').filter(p => p.length > 0);
-        let currentHandle = parentHandle;
-        for (let i = 0; i < parts.length - 1; i++) {
-            currentHandle = await currentHandle.getDirectoryHandle(parts[i], { create: true });
-        }
-        return { handle: currentHandle, filename: parts[parts.length - 1] };
-    }
-
     async function extractSelected() {
         const checked = document.querySelectorAll('.file-check:checked');
         const password = document.getElementById('pw').value;
@@ -290,7 +302,7 @@
 
         try {
             const destDir = await window.showDirectoryPicker();
-            log(`Extracting...`);
+            log(`Extracting ${checked.length} files...`);
 
             for (const cb of checked) {
                 const path = cb.getAttribute('data-name');
@@ -298,21 +310,27 @@
 
                 const bytes = extractFile(archiveBuffer, path, archiveFormat, password);
                 if (!bytes) {
-                    log(`Failed to extract: ${path}`);
+                    log(`Extraction failed for: ${path}`);
                     continue;
                 }
 
-                const { handle, filename } = await getHandleForPath(destDir, path);
-                const fileHandle = await handle.getFileHandle(filename, { create: true });
+                // Handle subdirectories
+                const parts = path.split('/').filter(p => p.length > 0);
+                let currentHandle = destDir;
+                for (let i = 0; i < parts.length - 1; i++) {
+                    currentHandle = await currentHandle.getDirectoryHandle(parts[i], { create: true });
+                }
+                const filename = parts[parts.length - 1];
+                
+                const fileHandle = await currentHandle.getFileHandle(filename, { create: true });
                 const writable = await fileHandle.createWritable();
                 await writable.write(bytes);
                 await writable.close();
             }
-            log("Extraction complete.");
-        } catch (e) { if (e.name !== 'AbortError') log("Extraction failed: " + e.message); }
+            log("Task finished.");
+        } catch (e) { if (e.name !== 'AbortError') log("Error: " + e.message); }
     }
 
-    // --- 6. Creation Logic ---
     async function createArchive(formatType) {
         if (!checkWasm()) return;
         const password = document.getElementById('pw').value;
@@ -333,16 +351,16 @@
                 }
             }
 
-            log("Scanning folder...");
+            log("Scanning local directory...");
             await scan(dirHandle);
             
-            log("Generating archive...");
-            // If wrapping the final file, we leave the inner ZIP plain for efficiency
+            log("Generating archive bytes...");
+            // If wrapping the final blob, we keep the inner ZIP plain
             let bytes = compressFiles(filesMap, formatType, useFullWrap ? "" : password);
             let finalName = `archive.${formatType === 'tgz' ? 'tar.gz' : 'zip'}`;
 
             if (useFullWrap && password) {
-                log("Applying AES-GCM container...");
+                log("Wrapping in AES-GCM container...");
                 bytes = encryptWrap(bytes, password);
                 finalName = "secure_archive.enc";
             }
@@ -351,8 +369,8 @@
             a.href = URL.createObjectURL(new Blob([bytes]));
             a.download = finalName;
             a.click();
-            log("Archive created and downloaded.");
-        } catch (e) { if (e.name !== 'AbortError') log("Error: " + e.message); }
+            log("Archive ready.");
+        } catch (e) { if (e.name !== 'AbortError') log("Creation error: " + e.message); }
     }
 </script>
 </body>
