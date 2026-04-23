@@ -19,7 +19,7 @@
             --status-bg: #f3f2f1;
             --accent-text: #605e5c;
             --input-bg: #ffffff;
-            --info-bg: #fff4ce; /* Amber info box */
+            --info-bg: #fff4ce;
             --info-text: #323130;
         }
 
@@ -74,7 +74,6 @@
 
         h2 { margin: 0; font-weight: 600; font-size: 1.2rem; }
         
-        /* --- Quick Start Tutorial Styles --- */
         .tutorial-box {
             background: var(--info-bg);
             color: var(--info-text);
@@ -156,7 +155,10 @@
     <header>
         <div class="header-top">
             <h2>Archive Manager</h2>
-            <button onclick="toggleTheme()" id="themeBtn">🌓 Appearance</button>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="downloadRecoveryScript()">🛠️ Recovery Script</button>
+                <button onclick="toggleTheme()" id="themeBtn">🌓 Appearance</button>
+            </div>
         </div>
         
         <div class="toolbar">
@@ -178,7 +180,7 @@
         <span class="tutorial-title">Quick Start</span>
         To password protect a zip, enter a password first, and then select <b>Create .zip</b>. tar does not support password protection.
         <br>
-        <span style="opacity: 0.8;"><b>Advanced:</b> Enable extra encryption by checking "Wrap (.enc)" to encrypt the entire container. This is not strictly necessary for password protected zips.</span>
+        <span style="opacity: 0.8;"><b>Advanced:</b> Enable extra encryption by checking "Wrap (.enc)". This produces a <b>.zip.enc</b> or <b>.tar.gz.enc</b> file.</span>
     </div>
 
     <div class="file-list-container">
@@ -249,13 +251,12 @@
                 log("Full-wrap container decrypted.");
             }
 
-            // Sniff format by magic bytes: PK (Zip) or 0x1F 0x8B (Gzip)
             if (bytes[0] === 0x50 && bytes[1] === 0x4B) {
                 archiveFormat = 'zip';
             } else if (bytes[0] === 0x1F && bytes[1] === 0x8B) {
                 archiveFormat = 'tgz';
             } else {
-                archiveFormat = 'tgz'; // Fallback
+                archiveFormat = 'tgz';
             }
 
             archiveBuffer = bytes;
@@ -314,7 +315,6 @@
                     continue;
                 }
 
-                // Handle subdirectories
                 const parts = path.split('/').filter(p => p.length > 0);
                 let currentHandle = destDir;
                 for (let i = 0; i < parts.length - 1; i++) {
@@ -355,22 +355,94 @@
             await scan(dirHandle);
             
             log("Generating archive bytes...");
-            // If wrapping the final blob, we keep the inner ZIP plain
             let bytes = compressFiles(filesMap, formatType, useFullWrap ? "" : password);
-            let finalName = `archive.${formatType === 'tgz' ? 'tar.gz' : 'zip'}`;
+            
+            // --- DYNAMIC FILENAME LOGIC ---
+            let finalName = dirHandle.name + (formatType === 'tgz' ? '.tar.gz' : '.zip');
 
             if (useFullWrap && password) {
                 log("Wrapping in AES-GCM container...");
                 bytes = encryptWrap(bytes, password);
-                finalName = "secure_archive.enc";
+                finalName += ".enc"; // Result: folder.zip.enc or folder.tar.gz.enc
             }
 
             const a = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([bytes]));
             a.download = finalName;
             a.click();
-            log("Archive ready.");
+            log("Archive ready: " + finalName);
         } catch (e) { if (e.name !== 'AbortError') log("Creation error: " + e.message); }
+    }
+
+    // --- Recovery Script Generator ---
+    function downloadRecoveryScript() {
+        const script = `"""
+RECOVERY SCRIPT FOR .ENC ARCHIVES
+---------------------------------
+INSTALLATION:
+Windows: pip install cryptography
+macOS:   python3 -m pip install cryptography --break-system-packages
+Linux:   pip install cryptography
+"""
+import os, sys, getpass
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+def recover():
+    if len(sys.argv) < 2:
+        print("Usage: python decrypt.py <filename.enc>")
+        return
+    
+    path = sys.argv[1]
+    if not os.path.exists(path):
+        print(f"Error: {path} not found.")
+        return
+
+    password = getpass.getpass(f"Enter decryption password for {os.path.basename(path)}: ")
+
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    if len(data) < 28:
+        print("Error: File is too small to be a valid .enc archive.")
+        return
+
+    salt, nonce, ciphertext = data[:16], data[16:28], data[28:]
+
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=4096
+    )
+    key = kdf.derive(password.encode())
+
+    try:
+        aesgcm = AESGCM(key)
+        plain = aesgcm.decrypt(nonce, ciphertext, None)
+        
+        # --- AUTOMATIC RENAME LOGIC ---
+        if path.lower().endswith('.enc'):
+            out_name = path[:-4] # Strip .enc
+        else:
+            out_name = path + ".decrypted"
+            
+        with open(out_name, 'wb') as f:
+            f.write(plain)
+        
+        print(f"\\n[SUCCESS] Decrypted file saved as: {out_name}")
+    except Exception as e:
+        print(f"\\n[ERROR] Decryption failed: {e}")
+
+if __name__ == "__main__":
+    recover()`;
+
+        const blob = new Blob([script], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = "decrypt_recovery.py";
+        a.click();
     }
 </script>
 </body>
