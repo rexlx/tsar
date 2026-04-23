@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go WASM Archive Explorer</title>
+    <script src="wasm_exec.js"></script>
+    <style>
+        /* --- CSS Variables for Theming --- */
+        :root {
+            --primary: #0078d4;
+            --bg: #f3f2f1;
+            --surface: #ffffff;
+            --text: #323130;
+            --border: #edebe9;
+            --hover: #f3f2f1;
+            --header-bg: #ffffff;
+            --table-header: #f3f2f1;
+            --status-bg: #f3f2f1;
+            --accent-text: #605e5c;
+        }
+
+        /* --- Dark Mode Overrides --- */
+        [data-theme="dark"] {
+            --bg: #1b1a19;
+            --surface: #252423;
+            --text: #f3f2f1;
+            --border: #3b3a39;
+            --hover: #323130;
+            --header-bg: #252423;
+            --table-header: #323130;
+            --status-bg: #1b1a19;
+            --accent-text: #a19f9d;
+        }
+
+        body { 
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
+            background: var(--bg); 
+            color: var(--text);
+            margin: 0; padding: 20px;
+            display: flex; justify-content: center;
+            transition: background 0.2s, color 0.2s;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .app-container {
+            width: 100%; max-width: 1000px;
+            background: var(--surface);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+            overflow: hidden;
+            display: flex; flex-direction: column;
+            height: 100%;
+        }
+
+        header { 
+            padding: 20px; 
+            border-bottom: 1px solid var(--border);
+            background: var(--header-bg);
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        h2 { margin: 0; font-weight: 600; font-size: 1.25rem; }
+        
+        .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
+        
+        button {
+            padding: 8px 14px; cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface); 
+            color: var(--text);
+            border-radius: 4px;
+            font-size: 14px; transition: all 0.2s;
+            display: flex; align-items: center; gap: 8px;
+            user-select: none;
+        }
+        button:hover:not(:disabled) { background: var(--hover); border-color: #8a8886; }
+        button.primary { background: var(--primary); color: white; border: none; }
+        button.primary:hover:not(:disabled) { background: #106ebe; }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .file-list-container {
+            flex: 1; overflow-y: auto;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        th { 
+            position: sticky; top: 0; background: var(--table-header); 
+            text-align: left; padding: 12px; font-size: 12px;
+            text-transform: uppercase; color: var(--accent-text);
+            z-index: 10;
+        }
+        td { 
+            padding: 10px 12px; 
+            border-bottom: 1px solid var(--border); 
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        tr:hover { background: var(--hover); }
+        
+        .checkbox-col { width: 45px; text-align: center; }
+
+        footer { 
+            padding: 8px 20px; 
+            background: var(--status-bg); 
+            font-size: 12px; 
+            color: var(--accent-text); 
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar { width: 10px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: #c8c6c4; border-radius: 5px; border: 2px solid var(--bg); }
+        [data-theme="dark"] ::-webkit-scrollbar-thumb { background: #484644; border: 2px solid var(--bg); }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <header>
+        <div class="header-top">
+            <h2>Archive Manager</h2>
+            <button onclick="toggleTheme()" id="themeBtn">🌙 Dark Mode</button>
+        </div>
+        <div class="toolbar">
+            <button onclick="openArchive()">📁 Open Archive</button>
+            <button onclick="createFromFolder('zip')">📦 New .zip</button>
+            <button onclick="createFromFolder('tgz')">📦 New .tar.gz</button>
+            <button id="extractBtn" class="primary" onclick="extractSelected()" disabled>📥 Extract Selected</button>
+        </div>
+    </header>
+
+    <div class="file-list-container">
+        <table>
+            <thead>
+                <tr>
+                    <th class="checkbox-col"><input type="checkbox" id="selectAll" onclick="toggleAll()"></th>
+                    <th>File Name</th>
+                </tr>
+            </thead>
+            <tbody id="fileListBody">
+                </tbody>
+        </table>
+    </div>
+
+    <footer>
+        <span id="statusBar">Ready. (Waiting for WASM)</span>
+        <span id="fileCount">0 items</span>
+    </footer>
+</div>
+
+<script>
+    // --- Theme Management ---
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('archive-theme', theme);
+        document.getElementById('themeBtn').innerText = theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
+    }
+
+    function toggleTheme() {
+        const current = localStorage.getItem('archive-theme') || 'light';
+        setTheme(current === 'light' ? 'dark' : 'light');
+    }
+
+    // Auto-detect system theme if no preference
+    const savedTheme = localStorage.getItem('archive-theme');
+    if (savedTheme) {
+        setTheme(savedTheme);
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        setTheme('dark');
+    }
+
+    // --- WASM Initialization ---
+    const go = new Go();
+    let archiveBuffer = null;
+    let archiveFormat = "";
+
+    const status = (msg) => document.getElementById('statusBar').innerText = msg;
+
+    WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+        go.run(result.instance);
+        status("WASM Module Loaded.");
+    }).catch(err => {
+        status("Failed to load WASM: " + err.message);
+    });
+
+    // --- Archive Interaction Logic ---
+
+    async function openArchive() {
+        try {
+            const [fileHandle] = await window.showOpenFilePicker({
+                types: [{
+                    description: 'Archives',
+                    accept: { 'application/zip': ['.zip'], 'application/x-tar': ['.tar'], 'application/gzip': ['.gz', '.tgz'] }
+                }]
+            });
+            const file = await fileHandle.getFile();
+            status(`Reading ${file.name}...`);
+            
+            const arrayBuf = await file.arrayBuffer();
+            archiveBuffer = new Uint8Array(arrayBuf);
+            
+            // Basic format detection
+            if (file.name.endsWith('.zip')) archiveFormat = 'zip';
+            else if (file.name.endsWith('.tar.gz') || file.name.endsWith('.tgz')) archiveFormat = 'tgz';
+            else archiveFormat = 'tar';
+
+            const list = listArchive(archiveBuffer, archiveFormat);
+            renderFileList(list);
+            status(`Loaded: ${file.name}`);
+        } catch (e) { 
+            if (e.name !== 'AbortError') status("Error: " + e.message); 
+        }
+    }
+
+    function renderFileList(files) {
+        const body = document.getElementById('fileListBody');
+        body.innerHTML = '';
+        document.getElementById('extractBtn').disabled = true;
+        document.getElementById('fileCount').innerText = `${files.length} items`;
+        document.getElementById('selectAll').checked = false;
+
+        files.forEach((name) => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="checkbox-col"><input type="checkbox" class="file-check" data-name="${name}" onchange="updateUI()"></td>
+                <td title="${name}">${name}</td>
+            `;
+            body.appendChild(row);
+        });
+    }
+
+    function updateUI() {
+        const checked = document.querySelectorAll('.file-check:checked');
+        const btn = document.getElementById('extractBtn');
+        btn.disabled = checked.length === 0;
+        btn.innerText = `📥 Extract Selected (${checked.length})`;
+    }
+
+    function toggleAll() {
+        const master = document.getElementById('selectAll');
+        document.querySelectorAll('.file-check').forEach(cb => cb.checked = master.checked);
+        updateUI();
+    }
+
+    // --- Directory Recursion & Extraction ---
+
+    async function getHandleForPath(parentHandle, path) {
+        const parts = path.split('/').filter(p => p.length > 0);
+        let currentHandle = parentHandle;
+        
+        // Iterate through all parts except the last one (the filename)
+        for (let i = 0; i < parts.length - 1; i++) {
+            currentHandle = await currentHandle.getDirectoryHandle(parts[i], { create: true });
+        }
+        return { 
+            handle: currentHandle, 
+            filename: parts[parts.length - 1] 
+        };
+    }
+
+    async function extractSelected() {
+        const checked = document.querySelectorAll('.file-check:checked');
+        if (!checked.length) return;
+
+        try {
+            const destDir = await window.showDirectoryPicker();
+            status(`Extracting ${checked.length} files...`);
+
+            for (const cb of checked) {
+                const fullPath = cb.getAttribute('data-name');
+                if (fullPath.endsWith('/')) continue; // Skip directory markers
+
+                // Call Go WASM function
+                const bytes = extractFile(archiveBuffer, fullPath, archiveFormat);
+                
+                // Get correct subfolder handle
+                const { handle, filename } = await getHandleForPath(destDir, fullPath);
+                
+                const fileHandle = await handle.getFileHandle(filename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(bytes);
+                await writable.close();
+            }
+
+            status("Extraction complete.");
+        } catch (e) { 
+            if (e.name !== 'AbortError') status("Extraction failed: " + e.message); 
+        }
+    }
+
+    // --- Folder Compression ---
+
+    async function createFromFolder(format) {
+        try {
+            const dirHandle = await window.showDirectoryPicker();
+            const filesMap = {};
+
+            async function scan(handle, path = "") {
+                for await (const entry of handle.values()) {
+                    if (entry.kind === 'file') {
+                        const file = await entry.getFile();
+                        filesMap[path + file.name] = new Uint8Array(await file.arrayBuffer());
+                    } else if (entry.kind === 'directory') {
+                        await scan(entry, path + entry.name + "/");
+                    }
+                }
+            }
+
+            status("Scanning Windows directory...");
+            await scan(dirHandle);
+            
+            status("Compressing in Go...");
+            const archiveBytes = compressFiles(filesMap, format);
+
+            const blob = new Blob([archiveBytes], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `new_archive.${format === 'tgz' ? 'tar.gz' : 'zip'}`;
+            a.click();
+            status("Download started.");
+        } catch (e) { 
+            if (e.name !== 'AbortError') status("Error: " + e.message); 
+        }
+    }
+</script>
+
+</body>
+</html>
