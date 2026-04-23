@@ -4,14 +4,28 @@ package main
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"syscall/js"
+
+	"github.com/yeka/zip"
+	"golang.org/x/crypto/pbkdf2"
 )
 
-// --- Helper Functions ---
+// --- Cryptography Helpers ---
+
+func deriveKey(password string, salt []byte) []byte {
+	// 4096 iterations is a good balance for WASM performance vs security
+	return pbkdf2.Key([]byte(password), salt, 4096, 32, sha256.New)
+}
+
+// --- WASM Interop Helpers ---
 
 func jsToBytes(v js.Value) []byte {
 	len := v.Get("byteLength").Int()
@@ -26,7 +40,57 @@ func bytesToJS(b []byte) js.Value {
 	return uint8Array
 }
 
-// --- Exported Functions ---
+// --- Exported Logic: Encryption Wrap ---
+
+func encryptWrap(this js.Value, args []js.Value) any {
+	plainData := jsToBytes(args[0])
+	password := args[1].String()
+
+	salt := make([]byte, 16)
+	rand.Read(salt)
+	key := deriveKey(password, salt)
+
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, gcm.NonceSize())
+	rand.Read(nonce)
+
+	ciphertext := gcm.Seal(nil, nonce, plainData, nil)
+	// Structure: [Salt 16][Nonce 12][Ciphertext...]
+	final := append(salt, nonce...)
+	final = append(final, ciphertext...)
+
+	return bytesToJS(final)
+}
+
+func decryptWrap(this js.Value, args []js.Value) any {
+	encData := jsToBytes(args[0])
+	password := args[1].String()
+
+	if len(encData) < 28 {
+		return nil
+	}
+
+	salt := encData[:16]
+	nonce := encData[16:28]
+	ciphertext := encData[28:]
+
+	key := deriveKey(password, salt)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil
+	}
+	gcm, _ := cipher.NewGCM(block)
+
+	plain, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil
+	} // Wrong password
+
+	return bytesToJS(plain)
+}
+
+// --- Exported Logic: Archiving ---
 
 func listArchive(this js.Value, args []js.Value) any {
 	data := jsToBytes(args[0])
@@ -44,13 +108,20 @@ func listArchive(this js.Value, args []js.Value) any {
 	} else {
 		var r io.Reader = bytes.NewReader(data)
 		if format == "tgz" {
-			gr, _ := gzip.NewReader(r)
+			gr, err := gzip.NewReader(r)
+			if err != nil {
+				return nil
+			}
+			defer gr.Close()
 			r = gr
 		}
 		tr := tar.NewReader(r)
 		for {
 			hdr, err := tr.Next()
 			if err == io.EOF {
+				break
+			}
+			if err != nil {
 				break
 			}
 			filenames = append(filenames, hdr.Name)
@@ -63,12 +134,19 @@ func extractFile(this js.Value, args []js.Value) any {
 	archiveData := jsToBytes(args[0])
 	targetName := args[1].String()
 	format := args[2].String()
+	password := args[3].String()
 
 	if format == "zip" {
 		r, _ := zip.NewReader(bytes.NewReader(archiveData), int64(len(archiveData)))
 		for _, f := range r.File {
 			if f.Name == targetName {
-				rc, _ := f.Open()
+				if f.IsEncrypted() {
+					f.SetPassword(password)
+				}
+				rc, err := f.Open()
+				if err != nil {
+					return nil
+				}
 				defer rc.Close()
 				buf := new(bytes.Buffer)
 				io.Copy(buf, rc)
@@ -100,6 +178,7 @@ func extractFile(this js.Value, args []js.Value) any {
 func compressFiles(this js.Value, args []js.Value) any {
 	files := args[0]
 	format := args[1].String()
+	password := args[2].String()
 	buf := new(bytes.Buffer)
 
 	if format == "zip" {
@@ -108,18 +187,25 @@ func compressFiles(this js.Value, args []js.Value) any {
 		for i := 0; i < keys.Length(); i++ {
 			name := keys.Index(i).String()
 			content := jsToBytes(files.Get(name))
-			f, _ := zw.Create(name)
-			f.Write(content)
+			var w io.Writer
+			if password != "" {
+				w, _ = zw.Encrypt(name, password, zip.AES256Encryption)
+			} else {
+				w, _ = zw.Create(name)
+			}
+			w.Write(content)
 		}
 		zw.Close()
 	} else {
-		var twWriter io.WriteCloser = tar.NewWriter(buf)
+		var tw *tar.Writer
+		var gw *gzip.Writer
 		if format == "tgz" {
-			gw := gzip.NewWriter(buf)
-			defer gw.Close()
-			twWriter = tar.NewWriter(gw)
+			gw = gzip.NewWriter(buf)
+			tw = tar.NewWriter(gw)
+		} else {
+			tw = tar.NewWriter(buf)
 		}
-		tw := twWriter.(*tar.Writer)
+
 		keys := js.Global().Get("Object").Call("keys", files)
 		for i := 0; i < keys.Length(); i++ {
 			name := keys.Index(i).String()
@@ -129,20 +215,20 @@ func compressFiles(this js.Value, args []js.Value) any {
 			tw.Write(content)
 		}
 		tw.Close()
+		if gw != nil {
+			gw.Close()
+		}
 	}
 	return bytesToJS(buf.Bytes())
 }
 
-// --- Main Entry ---
-
 func main() {
-	// This channel keeps the WASM instance alive
-	c := make(chan struct{}, 0)
-
-	// Register the functions into the JS Global scope
+	keepAlive := make(chan struct{}, 0)
 	js.Global().Set("listArchive", js.FuncOf(listArchive))
-	js.Global().Set("compressFiles", js.FuncOf(compressFiles))
 	js.Global().Set("extractFile", js.FuncOf(extractFile))
-
-	<-c
+	js.Global().Set("compressFiles", js.FuncOf(compressFiles))
+	js.Global().Set("encryptWrap", js.FuncOf(encryptWrap))
+	js.Global().Set("decryptWrap", js.FuncOf(decryptWrap))
+	fmt.Println("Go Archive System Online")
+	<-keepAlive
 }
