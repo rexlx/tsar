@@ -12,20 +12,24 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"strings"
 	"syscall/js"
 
 	"github.com/yeka/zip"
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// --- Cryptography Helpers ---
+const maxDecompressSize = 512 * 1024 * 1024
 
-func deriveKey(password string, salt []byte) []byte {
-	// 4096 iterations is a good balance for WASM performance vs security
-	return pbkdf2.Key([]byte(password), salt, 4096, 32, sha256.New)
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
-// --- WASM Interop Helpers ---
+func deriveKey(password string, salt []byte) []byte {
+	return pbkdf2.Key([]byte(password), salt, 100000, 32, sha256.New)
+}
 
 func jsToBytes(v js.Value) []byte {
 	len := v.Get("byteLength").Int()
@@ -40,15 +44,15 @@ func bytesToJS(b []byte) js.Value {
 	return uint8Array
 }
 
-// --- Exported Logic: Encryption Wrap ---
-
 func encryptWrap(this js.Value, args []js.Value) any {
 	plainData := jsToBytes(args[0])
+	defer zero(plainData)
 	password := args[1].String()
 
 	salt := make([]byte, 16)
 	rand.Read(salt)
 	key := deriveKey(password, salt)
+	defer zero(key)
 
 	block, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(block)
@@ -56,7 +60,6 @@ func encryptWrap(this js.Value, args []js.Value) any {
 	rand.Read(nonce)
 
 	ciphertext := gcm.Seal(nil, nonce, plainData, nil)
-	// Structure: [Salt 16][Nonce 12][Ciphertext...]
 	final := append(salt, nonce...)
 	final = append(final, ciphertext...)
 
@@ -76,6 +79,7 @@ func decryptWrap(this js.Value, args []js.Value) any {
 	ciphertext := encData[28:]
 
 	key := deriveKey(password, salt)
+	defer zero(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil
@@ -85,12 +89,12 @@ func decryptWrap(this js.Value, args []js.Value) any {
 	plain, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil
-	} // Wrong password
+	}
 
-	return bytesToJS(plain)
+	jsResult := bytesToJS(plain)
+	zero(plain)
+	return jsResult
 }
-
-// --- Exported Logic: Archiving ---
 
 func listArchive(this js.Value, args []js.Value) any {
 	data := jsToBytes(args[0])
@@ -136,10 +140,17 @@ func extractFile(this js.Value, args []js.Value) any {
 	format := args[2].String()
 	password := args[3].String()
 
+	if strings.Contains(targetName, "..") || strings.HasPrefix(targetName, "/") {
+		return nil
+	}
+
 	if format == "zip" {
 		r, _ := zip.NewReader(bytes.NewReader(archiveData), int64(len(archiveData)))
 		for _, f := range r.File {
 			if f.Name == targetName {
+				if f.UncompressedSize64 > maxDecompressSize {
+					return nil
+				}
 				if f.IsEncrypted() {
 					f.SetPassword(password)
 				}
@@ -150,7 +161,10 @@ func extractFile(this js.Value, args []js.Value) any {
 				defer rc.Close()
 				buf := new(bytes.Buffer)
 				io.Copy(buf, rc)
-				return bytesToJS(buf.Bytes())
+				res := buf.Bytes()
+				jsRes := bytesToJS(res)
+				zero(res)
+				return jsRes
 			}
 		}
 	} else {
@@ -166,9 +180,15 @@ func extractFile(this js.Value, args []js.Value) any {
 				break
 			}
 			if hdr.Name == targetName {
+				if hdr.Size > maxDecompressSize {
+					return nil
+				}
 				buf := new(bytes.Buffer)
-				io.Copy(buf, tr)
-				return bytesToJS(buf.Bytes())
+				io.Copy(buf, io.LimitReader(tr, maxDecompressSize))
+				res := buf.Bytes()
+				jsRes := bytesToJS(res)
+				zero(res)
+				return jsRes
 			}
 		}
 	}
@@ -194,6 +214,7 @@ func compressFiles(this js.Value, args []js.Value) any {
 				w, _ = zw.Create(name)
 			}
 			w.Write(content)
+			zero(content)
 		}
 		zw.Close()
 	} else {
@@ -213,6 +234,7 @@ func compressFiles(this js.Value, args []js.Value) any {
 			hdr := &tar.Header{Name: name, Size: int64(len(content))}
 			tw.WriteHeader(hdr)
 			tw.Write(content)
+			zero(content)
 		}
 		tw.Close()
 		if gw != nil {
